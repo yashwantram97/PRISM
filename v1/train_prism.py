@@ -222,7 +222,6 @@ def train(config: dict = CONFIG):
 
     # ── Training ──────────────────────────────────────────────────────────────
     model.train()
-    scaler = torch.cuda.amp.GradScaler()
 
     step         = 0
     update_step  = 0
@@ -237,7 +236,7 @@ def train(config: dict = CONFIG):
         labels    = batch["labels"].to(device)
 
         # Forward
-        with torch.cuda.amp.autocast(dtype=dtype):
+        with torch.amp.autocast('cuda', dtype=dtype):
             outputs = model(input_ids=input_ids, labels=labels)
             lm_loss = outputs.loss
 
@@ -253,7 +252,7 @@ def train(config: dict = CONFIG):
             loss = lm_loss - config["balance_weight"] * balance_loss
             loss = loss / config["grad_accum"]
 
-        scaler.scale(loss).backward()
+        loss.backward()
 
         accum_loss   += lm_loss.item()
         accum_tokens += input_ids.numel()
@@ -261,13 +260,11 @@ def train(config: dict = CONFIG):
 
         # Gradient update
         if step % config["grad_accum"] == 0:
-            scaler.unscale_(optimizer)
             nn.utils.clip_grad_norm_(
                 [p for p in model.parameters() if p.requires_grad],
                 config["grad_clip"],
             )
-            scaler.step(optimizer)
-            scaler.update()
+            optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
             update_step += 1

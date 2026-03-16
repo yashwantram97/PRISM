@@ -157,7 +157,7 @@ def _verify_gradient_flow(model: nn.Module):
     dummy_input[0, :] = torch.randint(0, vocab_size, (4,))
 
     # Forward pass
-    with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+    with torch.amp.autocast('cuda', dtype=torch.bfloat16):
         out = model(input_ids=dummy_input, labels=dummy_input)
     out.loss.backward()
 
