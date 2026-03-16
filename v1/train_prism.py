@@ -40,8 +40,8 @@ CONFIG = {
     "seq_len":           512,
 
     # Training
-    "per_device_batch":  16,
-    "grad_accum":        16,             # effective batch = 16*512*16 = 131,072 tokens
+    "per_device_batch":  4,
+    "grad_accum":        64,             # effective batch = 4*512*64 = 131,072 tokens
     "lr":                2e-4,
     "lr_delta":          2e-4,           # same for A,B — can tune separately
     "lr_router":         2e-4,
