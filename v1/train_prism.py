@@ -55,7 +55,7 @@ CONFIG = {
 
     # Checkpointing
     "output_dir":        "./checkpoints/prism_r4",
-    "save_every":        5000,
+    "save_every":        1000,
     "gate_check_step":   1000,           # SVD ratio gate check — go/no-go
 }
 
@@ -306,7 +306,7 @@ def train(config: dict = CONFIG):
 
                 # Compute a fresh avg_loss so the checkpoint doesn't record a
                 # potentially stale/zero value from a recent log-reset.
-                steps_since_last_log = (update_step % config["log_every"]) or config["log_every"]
+                steps_since_last_log = (update_step % config["log_every"]) if "log_every" in config else 1
                 gate_avg_loss = accum_loss / max(steps_since_last_log * config["grad_accum"], 1)
 
                 if ratio < 2.0:
@@ -314,14 +314,14 @@ def train(config: dict = CONFIG):
                     print("Delta is not differentiating tokens.")
                     print("Check proj_u/proj_v gradients before continuing.")
                     print("Stopping training — debug before proceeding.\n")
-                    save_checkpoint(model, optimizer, update_step, gate_avg_loss, config)
+                    save_checkpoint(model, optimizer, scheduler, update_step, gate_avg_loss, config)
                     return
                 else:
                     print(f"✓ SVD ratio {ratio:.2f} — gate passed, continuing\n")
 
             # ── Checkpointing ─────────────────────────────────────────────────
             if update_step % config["save_every"] == 0:
-                save_checkpoint(model, optimizer, update_step,
+                save_checkpoint(model, optimizer, scheduler, update_step,
                                 accum_loss, config)
 
             lr_now = scheduler.get_last_lr()[0] if update_step > 0 else config["lr"]
@@ -334,14 +334,14 @@ def train(config: dict = CONFIG):
 
     pbar.close()
     # ── Final checkpoint ──────────────────────────────────────────────────────
-    save_checkpoint(model, optimizer, update_step, accum_loss, config,
+    save_checkpoint(model, optimizer, scheduler, update_step, accum_loss, config,
                     name="final")
     print("Training complete.")
 
 
 # ── Checkpoint helpers ────────────────────────────────────────────────────────
 
-def save_checkpoint(model, optimizer, step, loss, config, name=None):
+def save_checkpoint(model, optimizer, scheduler, step, loss, config, name=None):
     tag  = name or f"step_{step}"
     path = os.path.join(config["output_dir"], f"checkpoint_{tag}.pt")
     torch.save({
@@ -349,6 +349,7 @@ def save_checkpoint(model, optimizer, step, loss, config, name=None):
         "loss":                loss,
         "model_state_dict":    model.state_dict(),
         "optimizer_state_dict":optimizer.state_dict(),
+        "scheduler_state_dict":scheduler.state_dict(),
         "config":              config,
     }, path)
     print(f"  Checkpoint saved: {path}")
