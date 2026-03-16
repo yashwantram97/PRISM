@@ -15,10 +15,9 @@ import os
 import math
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, IterableDataset
 from transformers import get_cosine_schedule_with_warmup
 from datasets import load_dataset
-import wandb
 from models.model_builder import build_prism_model
 from diagnostics.svd_check import svd_ratio_check
 
@@ -55,15 +54,38 @@ CONFIG = {
     "output_dir":        "./checkpoints/prism_r4",
     "save_every":        5000,
     "gate_check_step":   1000,           # SVD ratio gate check — go/no-go
-
-    # Logging
-    "wandb_project":     "prism-moe",
-    "wandb_run":         "prism-r4",
-    "log_every":         50,
 }
 
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
+
+class PackedDataset(IterableDataset):
+    def __init__(self, dataset, tokenizer, seq_len):
+        super().__init__()
+        self.dataset = dataset
+        self.tokenizer = tokenizer
+        self.seq_len = seq_len
+
+    def __iter__(self):
+        buffer = []
+        for example in self.dataset:
+            # tokenize on the fly
+            tokens = self.tokenizer(
+                example["text"],
+                truncation=False,
+                padding=False,
+                add_special_tokens=True,
+            )["input_ids"]
+
+            buffer.extend(tokens)
+            buffer.append(self.tokenizer.eos_token_id)
+
+            # yield fixed-size chunks
+            while len(buffer) >= self.seq_len + 1:
+                chunk = buffer[:self.seq_len + 1]
+                buffer = buffer[self.seq_len + 1:]
+                yield chunk
+
 
 def build_dataloader(tokenizer, config: dict) -> DataLoader:
     """Stream FineWeb-Edu, tokenize, pack into seq_len chunks."""
@@ -74,50 +96,21 @@ def build_dataloader(tokenizer, config: dict) -> DataLoader:
         streaming=True,
     )
 
-    seq_len = config["seq_len"]
-    buffer  = []
-
-    def tokenize_and_pack(examples):
-        nonlocal buffer
-        tokens = tokenizer(
-            examples["text"],
-            truncation=False,
-            padding=False,
-            add_special_tokens=True,
-        )["input_ids"]
-
-        # flatten all tokens into buffer
-        for seq in tokens:
-            buffer.extend(seq)
-            buffer.append(tokenizer.eos_token_id)
-
-        # pack into fixed-length chunks
-        chunks = []
-        while len(buffer) >= seq_len + 1:
-            chunk = buffer[:seq_len + 1]
-            chunks.append(chunk)
-            buffer = buffer[seq_len + 1:]
-
-        return {"input_ids": chunks}
-
-    packed = dataset.map(
-        tokenize_and_pack,
-        batched=True,
-        batch_size=1000,
-        remove_columns=["text", "id", "dump", "url", "file_path",
-                        "language", "language_score", "token_count",
-                        "score", "int_score"],
+    packed_dataset = PackedDataset(
+        dataset=dataset,
+        tokenizer=tokenizer,
+        seq_len=config["seq_len"]
     )
 
     def collate(batch):
-        ids = torch.tensor([b["input_ids"] for b in batch], dtype=torch.long)
+        ids = torch.tensor(batch, dtype=torch.long)
         return {
             "input_ids": ids[:, :-1],   # input
             "labels":    ids[:, 1:],    # shifted target
         }
 
     return DataLoader(
-        packed,
+        packed_dataset,
         batch_size=config["per_device_batch"],
         collate_fn=collate,
         num_workers=0,                            # must be 0 for IterableDataset — workers each get their own copy of the same iterator
@@ -172,13 +165,6 @@ def train(config: dict = CONFIG):
     os.makedirs(config["output_dir"], exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype  = torch.bfloat16
-
-    # ── Init wandb ────────────────────────────────────────────────────────────
-    wandb.init(
-        project=config["wandb_project"],
-        name=config["wandb_run"],
-        config=config,
-    )
 
     # ── Build model ───────────────────────────────────────────────────────────
     model, tokenizer, info = build_prism_model(
@@ -270,7 +256,7 @@ def train(config: dict = CONFIG):
             update_step += 1
 
             # ── Logging ───────────────────────────────────────────────────────
-            if update_step % config["log_every"] == 0:
+            if "log_every" in config and update_step % config["log_every"] == 0:
                 avg_loss = accum_loss / config["grad_accum"] / config["log_every"]
                 lr_now   = scheduler.get_last_lr()[0]
                 tokens_seen = step * tokens_per_step
@@ -280,13 +266,6 @@ def train(config: dict = CONFIG):
                       f"balance={balance_loss.item():.4f}  "
                       f"lr={lr_now:.2e}  "
                       f"tokens={tokens_seen/1e9:.2f}B")
-
-                wandb.log({
-                    "train/lm_loss":      avg_loss,
-                    "train/balance_loss": balance_loss.item(),
-                    "train/lr":           lr_now,
-                    "train/tokens_seen":  tokens_seen,
-                }, step=update_step)
 
                 accum_loss = 0.0
 
@@ -298,8 +277,6 @@ def train(config: dict = CONFIG):
                 model.eval()
                 ratio = svd_ratio_check(model, tokenizer, device)
                 model.train()
-
-                wandb.log({"diagnostic/svd_ratio": ratio}, step=update_step)
 
                 # Compute a fresh avg_loss so the checkpoint doesn't record a
                 # potentially stale/zero value from a recent log-reset.
@@ -325,7 +302,6 @@ def train(config: dict = CONFIG):
     save_checkpoint(model, optimizer, update_step, accum_loss, config,
                     name="final")
     print("Training complete.")
-    wandb.finish()
 
 
 # ── Checkpoint helpers ────────────────────────────────────────────────────────
