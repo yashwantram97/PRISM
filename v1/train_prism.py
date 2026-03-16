@@ -215,6 +215,11 @@ def train(config: dict = CONFIG):
     print(f"  Grad updates:     {grad_updates:,}")
     print(f"  Effective batch:  {config['per_device_batch']*config['seq_len']*config['grad_accum']:,} tokens\n")
 
+    # ── Enable Gradient Checkpointing ─────────────────────────────────────────
+    model.config.use_cache = False
+    model.enable_input_require_grads()
+    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
+
     # ── Training ──────────────────────────────────────────────────────────────
     model.train()
     scaler = torch.cuda.amp.GradScaler()
