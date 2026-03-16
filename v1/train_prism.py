@@ -15,6 +15,7 @@ import os
 import math
 import torch
 import torch.nn as nn
+from tqdm import tqdm
 from torch.utils.data import DataLoader, IterableDataset
 from transformers import get_cosine_schedule_with_warmup
 from datasets import load_dataset
@@ -214,6 +215,7 @@ def train(config: dict = CONFIG):
     accum_loss   = 0.0
     accum_tokens = 0
 
+    pbar = tqdm(total=total_steps, desc="Training")
     for batch in dataloader:
         if step >= total_steps:
             break
@@ -261,11 +263,11 @@ def train(config: dict = CONFIG):
                 lr_now   = scheduler.get_last_lr()[0]
                 tokens_seen = step * tokens_per_step
 
-                print(f"  step={update_step:>6}  "
-                      f"loss={avg_loss:.4f}  "
-                      f"balance={balance_loss.item():.4f}  "
-                      f"lr={lr_now:.2e}  "
-                      f"tokens={tokens_seen/1e9:.2f}B")
+                pbar.set_postfix({
+                    "loss": f"{avg_loss:.4f}",
+                    "balance": f"{balance_loss.item():.4f}",
+                    "lr": f"{lr_now:.2e}"
+                })
 
                 accum_loss = 0.0
 
@@ -298,6 +300,9 @@ def train(config: dict = CONFIG):
                 save_checkpoint(model, optimizer, update_step,
                                 accum_loss, config)
 
+        pbar.update(1)
+
+    pbar.close()
     # ── Final checkpoint ──────────────────────────────────────────────────────
     save_checkpoint(model, optimizer, update_step, accum_loss, config,
                     name="final")
