@@ -248,7 +248,7 @@ def train(config: dict = CONFIG):
     accum_tokens = 0
 
     tqdm_out = TqdmToLogger(logger, level=logging.INFO)
-    pbar = tqdm(total=total_steps, desc="Training", file=tqdm_out, mininterval=10.0)
+    pbar = tqdm(total=grad_updates, desc="Training", file=tqdm_out)
     for batch in dataloader:
         if step >= total_steps:
             break
@@ -324,13 +324,13 @@ def train(config: dict = CONFIG):
                 save_checkpoint(model, optimizer, update_step,
                                 accum_loss, config)
 
-        lr_now = scheduler.get_last_lr()[0] if update_step > 0 else config["lr"]
-        pbar.set_postfix({
-            "loss": f"{loss.item() * config['grad_accum']:.4f}",
-            "balance": f"{balance_loss.item():.4f}",
-            "lr": f"{lr_now:.2e}"
-        })
-        pbar.update(1)
+            lr_now = scheduler.get_last_lr()[0] if update_step > 0 else config["lr"]
+            pbar.set_postfix({
+                "loss": f"{loss.item() * config['grad_accum']:.4f}",
+                "balance": f"{balance_loss.item():.4f}",
+                "lr": f"{lr_now:.2e}"
+            })
+            pbar.update(1)
 
     pbar.close()
     # ── Final checkpoint ──────────────────────────────────────────────────────
